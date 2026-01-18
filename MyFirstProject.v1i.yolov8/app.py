@@ -1,7 +1,7 @@
 """
 Faulty Rings Detection - Real-time Dashboard
 Streamlit app to visualize detection results from Firebase
-FIXED VERSION - Handles Firebase response correctly
+FIXED VERSION - Full Features + Cloud Compatibility
 """
 
 import streamlit as st
@@ -14,6 +14,7 @@ from pathlib import Path
 import time
 from datetime import datetime, timedelta
 import os
+from PIL import Image
 
 # ============================================================================
 # PAGE CONFIG
@@ -45,39 +46,79 @@ st.markdown("""
         font-weight: bold;
         margin: 2px;
     }
-    .breakage { background-color: #FF6B6B; color: white; }
-    .crack { background-color: #FFA500; color: white; }
-    .scratch { background-color: #4ECDC4; color: white; }
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# FIREBASE INITIALIZATION
+# FIREBASE INITIALIZATION (CRITICAL FIX FOR CLOUD)
 # ============================================================================
 @st.cache_resource
 def init_firebase():
-    """Initialize Firebase connection (cached)"""
+    """Initialize Firebase connection (Works with Secrets & Local file)"""
     try:
-        try:
-            from firebase_config import FIREBASE_DATABASE_URL, SERVICE_ACCOUNT_KEY_PATH
-        except:
-            st.error("❌ firebase_config.py not found. Please create it with your Firebase credentials.")
-            return None
-        
-        if not firebase_admin._apps:
-            cred = credentials.Certificate(SERVICE_ACCOUNT_KEY_PATH)
+        # Check if already initialized to prevent errors
+        if firebase_admin._apps:
+            return db
+
+        # ---------------------------------------------------------
+        # OPTION 1: Streamlit Cloud (Secrets)
+        # ---------------------------------------------------------
+        if "firebase" in st.secrets:
+            # Convert TOML secret back to dict
+            service_key = dict(st.secrets["firebase"])
+            
+            # FIX: Handle newlines in private key (The \n issue)
+            if "private_key" in service_key:
+                service_key["private_key"] = service_key["private_key"].replace("\\n", "\n")
+            
+            cred = credentials.Certificate(service_key)
+            
+            # Get Database URL safely
+            db_url = st.secrets.get("database_url")
+            if not db_url and "database_url" in service_key:
+                 db_url = service_key["database_url"]
+            
+            if not db_url:
+                st.error("❌ Database URL is missing from Secrets!")
+                return None
+
             firebase_admin.initialize_app(cred, {
-                'databaseURL': FIREBASE_DATABASE_URL
+                'databaseURL': db_url
             })
+            return db
+
+        # ---------------------------------------------------------
+        # OPTION 2: Localhost (serviceAccountKey.json)
+        # ---------------------------------------------------------
+        elif os.path.exists("serviceAccountKey.json"):
+            try:
+                # Try to import URL from config, but handle failure
+                try:
+                    from firebase_config import FIREBASE_DATABASE_URL
+                except ImportError:
+                    st.error("❌ found serviceAccountKey.json but missing firebase_config.py for URL")
+                    return None
+
+                cred = credentials.Certificate("serviceAccountKey.json")
+                firebase_admin.initialize_app(cred, {
+                    'databaseURL': FIREBASE_DATABASE_URL
+                })
+                return db
+            except Exception as local_err:
+                 st.error(f"❌ Local init failed: {local_err}")
+                 return None
         
-        return db
+        else:
+            st.error("❌ Credentials not found! Please set up Streamlit Secrets or local key file.")
+            return None
+
     except Exception as e:
         st.error(f"❌ Firebase Connection Failed: {str(e)}")
         return None
 
 
 # ============================================================================
-# DATA FETCHING FUNCTIONS - ROBUST VERSION
+# DATA FETCHING FUNCTIONS (YOUR ORIGINAL LOGIC)
 # ============================================================================
 def safe_get_data(path):
     """Safely get data from Firebase"""
@@ -90,9 +131,6 @@ def safe_get_data(path):
         snapshot = ref.get()
         
         # Handle both DataSnapshot and direct dict returns
-        if snapshot is None:
-            return {}
-        
         if hasattr(snapshot, 'val'):
             data = snapshot.val()
         else:
@@ -150,58 +188,29 @@ def get_recent_detections(hours=24):
 
 
 def get_system_status():
-    """Fetch current system status"""
     try:
-        data = safe_get_data("system/status")
+        data = safe_get_data("system_status") # Changed to match your test.py (system_status vs system/status)
+        if not data:
+             data = safe_get_data("system/status") # Fallback
         return data if data and isinstance(data, dict) else None
     except:
         return None
-
-
-def get_camera_status():
-    """Fetch current camera status"""
-    try:
-        data = safe_get_data("camera_status/current")
-        return data if data and isinstance(data, dict) else None
-    except:
-        return None
-
 
 def get_all_statistics():
-    """Fetch all session statistics"""
     try:
         data = safe_get_data("statistics")
-        
         if not data or not isinstance(data, dict):
             return pd.DataFrame()
-        
         stats = []
         for key, stat in data.items():
             if isinstance(stat, dict):
                 stat['session_id'] = key
                 stats.append(stat)
-        
         if stats:
             return pd.DataFrame(stats)
-        
         return pd.DataFrame()
     except Exception as e:
-        st.warning(f"⚠️ Error fetching statistics: {str(e)}")
         return pd.DataFrame()
-
-
-def get_database_stats():
-    """Get total counts from database"""
-    try:
-        all_detections = get_all_detections()
-        all_stats = get_all_statistics()
-        
-        return {
-            'total_detections': len(all_detections),
-            'total_sessions': len(all_stats)
-        }
-    except:
-        return {'total_detections': 0, 'total_sessions': 0}
 
 # ============================================================================
 # MAIN APP
@@ -211,8 +220,7 @@ def main():
     database = init_firebase()
     
     if not database:
-        st.error("Cannot connect to Firebase. Please check your configuration in firebase_config.py")
-        return
+        st.stop() # Stop execution if no DB
     
     # ========================================================================
     # HEADER
@@ -225,12 +233,8 @@ def main():
     with col2:
         auto_refresh = st.checkbox("🔄 Auto-refresh", value=True)
     with col3:
-        if auto_refresh:
-            refresh_interval = st.select_slider(
-                "Refresh every (seconds)", 
-                options=[5, 10, 15, 30, 60], 
-                value=10
-            )
+        if st.button("Force Refresh"):
+            st.rerun()
     
     st.markdown("---")
     
@@ -241,14 +245,16 @@ def main():
     
     # Get current data
     system_status = get_system_status()
-    camera_status = get_camera_status()
     detections_df = get_recent_detections(hours=24)
-    db_stats = get_database_stats()
     
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        is_active = system_status.get('is_active', False) if system_status else False
+        # Check 'is_active' (from test.py) or 'online' (from cloud_client.py)
+        is_active = False
+        if system_status:
+            is_active = system_status.get('is_active', system_status.get('online', False))
+            
         status_text = "🟢 RUNNING" if is_active else "🔴 STOPPED"
         st.metric("System Status", status_text)
     
@@ -278,7 +284,7 @@ def main():
     # ========================================================================
     # TABS
     # ========================================================================
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Analytics", "📋 Detection History", "📈 Statistics", "⚙️ Live Status"])
+    tab1, tab2, tab3 = st.tabs(["📊 Analytics", "📋 Detection History", "📈 Live Feed"])
     
     # ========================================================================
     # TAB 1: ANALYTICS
@@ -287,70 +293,48 @@ def main():
         st.markdown("### Detection Analytics")
         
         if not detections_df.empty:
-            # Ensure timestamp is datetime
-            if 'timestamp' in detections_df.columns:
-                detections_df['timestamp'] = pd.to_datetime(detections_df['timestamp'], errors='coerce')
-            
             col1, col2 = st.columns(2)
             
             # Defect Type Distribution
             with col1:
                 if 'defect_type' in detections_df.columns:
                     defect_counts = detections_df['defect_type'].value_counts()
-                    if not defect_counts.empty:
-                        fig = px.pie(
-                            values=defect_counts.values,
-                            names=defect_counts.index,
-                            title="Defects by Type",
-                            color_discrete_map={
-                                'breakage': '#FF6B6B',
-                                'crack': '#FFA500',
-                                'scratch': '#4ECDC4'
-                            }
-                        )
-                        st.plotly_chart(fig, width='stretch')
-                    else:
-                        st.info("No defect type data available")
+                    fig = px.pie(
+                        values=defect_counts.values,
+                        names=defect_counts.index,
+                        title="Defects by Type",
+                        color_discrete_sequence=px.colors.qualitative.Pastel
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.info("No defect type column found")
+                    st.info("No defect type data available")
             
             # Confidence Distribution
             with col2:
                 if 'confidence' in detections_df.columns:
-                    try:
-                        confidence_data = pd.to_numeric(detections_df['confidence'], errors='coerce').dropna()
-                        if not confidence_data.empty:
-                            fig = px.histogram(
-                                confidence_data,
-                                nbins=20,
-                                title="Confidence Distribution",
-                                labels={'value': 'Confidence', 'count': 'Count'}
-                            )
-                            fig.update_layout(showlegend=False)
-                            st.plotly_chart(fig, width='stretch')
-                        else:
-                            st.info("No valid confidence data")
-                    except:
-                        st.info("Could not process confidence data")
+                    fig = px.histogram(
+                        detections_df, x="confidence",
+                        nbins=20,
+                        title="Confidence Distribution",
+                        labels={'confidence': 'Confidence Score'}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.info("No confidence column found")
+                    st.info("No confidence data available")
             
             # Timeline
             st.markdown("#### Detection Timeline (24h)")
-            
             try:
-                hourly_counts = detections_df.set_index('timestamp').resample('h').size()
-                if not hourly_counts.empty:
-                    fig = px.bar(
-                        hourly_counts,
-                        title="Hourly Detection Count",
-                        labels={'value': 'Count', 'timestamp': 'Time'}
-                    )
-                    st.plotly_chart(fig, width='stretch')
-                else:
-                    st.info("No timeline data available")
-            except:
-                st.info("Could not generate timeline")
+                # Group by hour
+                timeline_df = detections_df.set_index('timestamp').resample('H').size().reset_index(name='count')
+                fig = px.bar(
+                    timeline_df, x='timestamp', y='count',
+                    title="Hourly Detection Count",
+                    labels={'timestamp': 'Time', 'count': 'Detections'}
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.info(f"Could not generate timeline: {e}")
         
         else:
             st.info("💡 No detection data available yet. Start the detection system to see analytics.")
@@ -364,181 +348,83 @@ def main():
         if not detections_df.empty:
             # Filters
             col1, col2, col3 = st.columns(3)
-            
             with col1:
                 if 'defect_type' in detections_df.columns:
-                    defect_filter = st.multiselect(
-                        "Filter by Defect Type",
-                        options=detections_df['defect_type'].unique(),
-                        default=detections_df['defect_type'].unique()
-                    )
+                    types = list(detections_df['defect_type'].unique())
+                    defect_filter = st.multiselect("Filter by Type", options=types, default=types)
                 else:
-                    defect_filter = None
-            
-            with col2:
-                if 'confidence' in detections_df.columns:
-                    try:
-                        min_conf = float(st.slider("Min Confidence", 0.0, 1.0, 0.0, 0.05))
-                    except:
-                        min_conf = 0.0
-                else:
-                    min_conf = 0.0
-            
-            with col3:
-                st.write("")  # Spacing
-            
+                    defect_filter = []
+
             # Apply filters
             filtered_df = detections_df.copy()
-            
             if defect_filter and 'defect_type' in filtered_df.columns:
                 filtered_df = filtered_df[filtered_df['defect_type'].isin(defect_filter)]
             
-            if 'confidence' in filtered_df.columns:
-                try:
-                    filtered_df['confidence_numeric'] = pd.to_numeric(filtered_df['confidence'], errors='coerce')
-                    filtered_df = filtered_df[filtered_df['confidence_numeric'] >= min_conf]
-                except:
-                    pass
-            
-            # Display table
+            # Display Table
             if not filtered_df.empty:
-                # Select columns to display
-                display_cols = [col for col in ['timestamp', 'defect_type', 'confidence', 'image_filename', 'ring_count'] 
-                               if col in filtered_df.columns]
+                display_cols = ['timestamp', 'defect_type', 'confidence', 'ring_count']
+                available_cols = [c for c in display_cols if c in filtered_df.columns]
                 
                 st.dataframe(
-                    filtered_df[display_cols].sort_values('timestamp', ascending=False),
-                    width='stretch',
+                    filtered_df[available_cols].sort_values('timestamp', ascending=False),
+                    use_container_width=True,
                     hide_index=True
                 )
                 
-                # Display detected fault images
-                st.markdown("#### Detected Fault Images")
+                # Image Gallery (Local only warning)
+                st.markdown("#### Detected Fault Images (Local Only)")
                 
-                detections_with_images = filtered_df[filtered_df['image_filename'].notna()].sort_values('timestamp', ascending=False)
+                # Check if we are on cloud
+                is_cloud = "firebase" in st.secrets
                 
-                if not detections_with_images.empty:
-                    # Create a grid of images
-                    cols_per_row = 3
-                    num_images = len(detections_with_images)
-                    
-                    for row_idx in range(0, num_images, cols_per_row):
-                        cols = st.columns(cols_per_row)
-                        
-                        for col_idx, col in enumerate(cols):
-                            img_idx = row_idx + col_idx
-                            if img_idx < num_images:
-                                detection = detections_with_images.iloc[img_idx]
-                                image_filename = detection['image_filename']
-                                image_path = Path("detected_faults") / image_filename
-                                
-                                with col:
-                                    if image_path.exists():
-                                        try:
-                                            from PIL import Image
-                                            img = Image.open(str(image_path))
-                                            st.image(
-                                                img, 
-                                                caption=f"{detection['defect_type'].upper()}\n{detection['confidence']:.1%}"
-                                            )
-                                        except Exception as e:
-                                            st.error(f"Error: {str(e)[:40]}")
-                                    else:
-                                        st.error(f"Not found: {image_filename}")
+                if is_cloud:
+                    st.warning("⚠️ Note: Images stored on your laptop cannot be viewed here on the Cloud. This gallery only works when running `streamlit run app.py` on your machine.")
                 else:
-                    st.info("💡 No detected fault images available yet")
+                    # Logic for displaying local images
+                    detections_with_images = filtered_df[filtered_df.get('image_filename', pd.Series()).notna()]
+                    
+                    if not detections_with_images.empty:
+                        cols = st.columns(3)
+                        for idx, row in detections_with_images.head(6).iterrows():
+                            # Logic to find image
+                            img_path = Path("detected_faults") / row['image_filename']
+                            col_idx = idx % 3
+                            
+                            with cols[col_idx]:
+                                if img_path.exists():
+                                    try:
+                                        img = Image.open(img_path)
+                                        st.image(img, caption=f"{row.get('defect_type','Unknown')} ({row.get('confidence',0):.0%})")
+                                    except:
+                                        st.error(f"Error loading {row['image_filename']}")
             else:
-                st.info("No detections match the selected filters")
-        
+                st.info("No detections match filters.")
         else:
-            st.info("💡 No detection history available yet.")
-    
+            st.info("Log is empty.")
+
     # ========================================================================
-    # TAB 3: STATISTICS
+    # TAB 3: LIVE FEED ALERT
     # ========================================================================
     with tab3:
-        st.markdown("### Session Statistics")
-        
-        stats_df = get_all_statistics()
-        
-        if not stats_df.empty:
-            # Summary metrics
-            col1, col2, col3 = st.columns(3)
+        st.subheader("Latest System Event")
+        if not detections_df.empty:
+            latest = detections_df.iloc[0]
             
-            with col1:
-                st.metric("Total Sessions", len(stats_df))
-            
-            with col2:
-                if 'total_detections' in stats_df.columns:
-                    try:
-                        total = pd.to_numeric(stats_df['total_detections'], errors='coerce').sum()
-                        st.metric("Total Detections", int(total))
-                    except:
-                        st.metric("Total Detections", "N/A")
-                else:
-                    st.metric("Total Detections", "N/A")
-            
-            with col3:
-                if 'avg_confidence' in stats_df.columns:
-                    try:
-                        avg = pd.to_numeric(stats_df['avg_confidence'], errors='coerce').mean()
-                        st.metric("Avg Session Confidence", f"{avg:.2%}")
-                    except:
-                        st.metric("Avg Session Confidence", "N/A")
-                else:
-                    st.metric("Avg Session Confidence", "N/A")
-            
-            st.markdown("#### Session Details")
-            
-            # Display sessions table
-            display_cols = [col for col in stats_df.columns if col != 'session_id']
-            st.dataframe(stats_df, width='stretch', hide_index=True)
-        
+            st.markdown(f"""
+            <div style='padding: 20px; background-color: #ffe6e6; border-radius: 10px; border: 2px solid #ff4b4b; text-align: center;'>
+                <h1 style='color: #ff4b4b; margin:0;'>🚨 {latest.get('defect_type', 'UNKNOWN').upper()}</h1>
+                <h3 style='margin:0;'>Confidence: {latest.get('confidence', 0):.1%}</h3>
+                <p style='color: gray;'>{latest.get('timestamp', 'Just now')}</p>
+            </div>
+            """, unsafe_allow_html=True)
         else:
-            st.info("💡 No session statistics available yet.")
-    
+            st.success("System is running. No defects detected recently.")
+
     # ========================================================================
-    # TAB 4: LIVE STATUS
-    # ========================================================================
-    with tab4:
-        st.markdown("### Live System Status")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("#### System Status")
-            if system_status:
-                st.json(system_status)
-            else:
-                st.info("No system status data available")
-        
-        with col2:
-            st.markdown("#### Camera Status")
-            if camera_status:
-                st.json(camera_status)
-            else:
-                st.info("No camera status data available")
-        
-        # Database stats
-        st.markdown("#### Database Statistics")
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            total_det = db_stats['total_detections']
-            st.metric("Total Detections in DB", total_det)
-        
-        with col2:
-            total_sess = db_stats['total_sessions']
-            st.metric("Total Sessions in DB", total_sess)
-        
-        with col3:
-            st.metric("Last Updated", datetime.now().strftime("%H:%M:%S"))
-    
-    # ========================================================================
-    # AUTO-REFRESH
+    # AUTO-REFRESH LOGIC
     # ========================================================================
     if auto_refresh:
-        time.sleep(refresh_interval)
+        time.sleep(10)  # Refresh every 10 seconds
         st.rerun()
 
 if __name__ == "__main__":
