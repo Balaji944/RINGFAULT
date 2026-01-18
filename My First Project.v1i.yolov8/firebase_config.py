@@ -2,14 +2,25 @@
 Firebase Configuration
 Stores Firebase database URL and credentials
 """
+import os
+import json
+
+# Check if running on Streamlit Cloud
+try:
+    import streamlit as st
+    IS_STREAMLIT_CLOUD = hasattr(st, 'secrets')
+except:
+    IS_STREAMLIT_CLOUD = False
 
 # Your Firebase Realtime Database URL
-# Get this from Firebase Console > Realtime Database > Data tab
-FIREBASE_DATABASE_URL = "https://ring-detection-c6326-default-rtdb.firebaseio.com/"
-
-# Path to your Firebase service account key
-# Download from: Firebase Console > Project Settings > Service Accounts > Generate New Private Key
-SERVICE_ACCOUNT_KEY_PATH = "serviceAccountKey.json"
+if IS_STREAMLIT_CLOUD:
+    # Read from Streamlit secrets when deployed
+    FIREBASE_DATABASE_URL = st.secrets.get("firebase", {}).get("database_url", "https://ring-detection-c6326-default-rtdb.firebaseio.com/")
+    SERVICE_ACCOUNT_KEY_PATH = st.secrets.get("firebase", {})  # Entire dict from secrets
+else:
+    # Read from local file when running locally
+    FIREBASE_DATABASE_URL = "https://ring-detection-c6326-default-rtdb.firebaseio.com/"
+    SERVICE_ACCOUNT_KEY_PATH = "serviceAccountKey.json"
 
 # Database paths (collections where data will be stored)
 DETECTION_RESULTS_PATH = "detections"  # Where detection results are stored
