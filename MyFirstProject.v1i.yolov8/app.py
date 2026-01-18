@@ -14,7 +14,7 @@ import time
 # ============================================================================
 # CONFIG & SETUP
 # ============================================================================
-st.set_page_config(page_title="Ring Detection Dashboard", page_icon="💍", layout="wide")
+st.set_page_config(page_title="Ring Detection Dashboard", layout="wide")
 
 # Force Streamlit to treat timestamps as UTC to avoid timezone math errors
 pd.options.mode.chained_assignment = None 
