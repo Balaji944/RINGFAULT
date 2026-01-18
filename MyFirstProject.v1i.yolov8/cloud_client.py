@@ -1,6 +1,5 @@
 """
-Cloud Client - Direct Import Version
-Uses my_secrets.py to bypass JSON errors
+Cloud Client - Clean Version
 """
 import firebase_admin
 from firebase_admin import credentials, db
@@ -9,7 +8,6 @@ import time
 
 class CloudClient:
     def __init__(self, key_input=None, db_url=None):
-        # We ignore the inputs and load from my_secrets.py directly
         self.connected = False
         self.app = None
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -17,13 +15,16 @@ class CloudClient:
         print(f"🔌 Initializing Cloud Connection...")
 
         try:
-            # Import the clean dictionary directly
+            # Import credentials from my_secrets
             from my_secrets import FIREBASE_CREDENTIALS, DATABASE_URL
             
-            print("   🔑 Loaded credentials from my_secrets.py")
+            if not FIREBASE_CREDENTIALS:
+                print("❌ Credentials are missing/empty.")
+                return
+
             cred = credentials.Certificate(FIREBASE_CREDENTIALS)
 
-            # Connect to Firebase
+            # Connect
             if not firebase_admin._apps:
                 self.app = firebase_admin.initialize_app(cred, {
                     'databaseURL': DATABASE_URL
@@ -35,11 +36,11 @@ class CloudClient:
             self.connected = True
             print("✅ Firebase Connected Successfully!")
             
-            # Send initial heartbeat
+            # Send heartbeat
             self.update_system_status(True)
             
         except Exception as e:
-            print(f"❌ Connection Critical Error: {e}")
+            print(f"❌ Connection Error: {e}")
             self.connected = False
 
     def send_detection(self, confidence, ring_count=1, defect_type="unknown", image_filename=None):
