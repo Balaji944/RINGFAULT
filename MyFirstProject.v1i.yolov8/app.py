@@ -1,62 +1,78 @@
 """
-Faulty Rings Detection - Dashboard
-v3.0 - Fixed Timezones & Caching
+Ring Fault Detection System - Operations Dashboard
+v5.0 - Industrial UI & Image Gallery Integration
 """
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import firebase_admin
 from firebase_admin import credentials, db
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 
 # ============================================================================
-# CONFIG & SETUP
+# 1. PAGE CONFIGURATION & STYLING
 # ============================================================================
-st.set_page_config(page_title="Ring Detection Dashboard", layout="wide")
+st.set_page_config(
+    page_title="Quality Control Dashboard",
+    page_icon="⚙️",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-# Force Streamlit to treat timestamps as UTC to avoid timezone math errors
+# Custom CSS for Industrial/Professional Look
+st.markdown("""
+    <style>
+        .block-container { padding-top: 1.5rem; }
+        h1 { font-family: 'Helvetica', sans-serif; font-size: 2.2rem; }
+        div[data-testid="stMetricValue"] { font-size: 24px; font-weight: 600; }
+        .stAlert { padding: 0.5rem; border-radius: 4px; }
+        img { border-radius: 4px; border: 1px solid #444; }
+        .stButton>button { width: 100%; border-radius: 4px; }
+    </style>
+""", unsafe_allow_html=True)
+
+# Avoid Pandas Chained Assignment warnings
 pd.options.mode.chained_assignment = None 
 
 # ============================================================================
-# FIREBASE CONNECTION
+# 2. FIREBASE CONNECTION
 # ============================================================================
 @st.cache_resource
 def init_firebase():
-    """Initialize Firebase connection"""
+    """Initialize Firebase connection safely"""
     try:
         if firebase_admin._apps:
             return db
             
-        # Try loading from Secrets (Cloud)
         if "firebase" in st.secrets:
             key_dict = dict(st.secrets["firebase"])
-            # Fix private key newlines
+            # Fix private key newlines formatting
             if "private_key" in key_dict:
                 key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
             
             cred = credentials.Certificate(key_dict)
             firebase_admin.initialize_app(cred, {'databaseURL': st.secrets["database_url"]})
             return db
-            
         return None
     except Exception as e:
-        st.error(f"Firebase Error: {e}")
+        st.error(f"Connection Error: {e}")
         return None
 
 # ============================================================================
-# DATA FETCHING
+# 3. DATA FETCHING
 # ============================================================================
 def get_data():
-    """Fetch all data without caching to ensure real-time updates"""
+    """Fetch recent detection data"""
     database = init_firebase()
     if not database: return pd.DataFrame()
     
     try:
         ref = database.reference('detections')
-        # Get last 100 records to keep it fast
-        snapshot = ref.order_by_key().limit_to_last(100).get()
+        # Fetch last 50 records for performance
+        snapshot = ref.order_by_key().limit_to_last(50).get()
         
         if not snapshot: return pd.DataFrame()
         
@@ -67,19 +83,17 @@ def get_data():
             
         df = pd.DataFrame(data_list)
         
-        # CRITICAL FIX: Use unix_timestamp for sorting, then convert to readable
+        # Process timestamps
         if 'unix_timestamp' in df.columns:
             df['datetime'] = pd.to_datetime(df['unix_timestamp'], unit='s')
-            # Adjust to IST (UTC+5:30) for display manually if needed, 
-            # but usually browser handles local time. Let's keep it simple.
             df = df.sort_values('unix_timestamp', ascending=False)
             
         return df
     except Exception as e:
-        st.error(f"Data Error: {e}")
         return pd.DataFrame()
 
 def get_system_status():
+    """Fetch live system status"""
     database = init_firebase()
     if not database: return {}
     try:
@@ -88,91 +102,130 @@ def get_system_status():
         return {}
 
 # ============================================================================
-# MAIN DASHBOARD
+# 4. DASHBOARD LAYOUT
 # ============================================================================
 def main():
-    st.title("💍 Faulty Rings Live Dashboard")
-    
-    # --- ACTION BAR ---
-    col1, col2, col3 = st.columns([6, 2, 2])
+    # --- HEADER SECTION ---
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.title("Ring Fault Detection System")
+        st.caption("Real-time Quality Control & Automated Inspection Log")
     with col2:
-        if st.button("🔄 Force Refresh Data"):
+        st.write("") # Spacer
+        if st.button("Refresh Data"):
             st.cache_data.clear()
             st.rerun()
-    with col3:
-        if st.button("🗑️ Clear All History"):
-            database = init_firebase()
-            if database:
-                database.reference('detections').delete()
-                database.reference('statistics').delete()
-                st.success("History cleared!")
-                time.sleep(1)
-                st.rerun()
+
+    st.divider()
 
     # --- FETCH DATA ---
     df = get_data()
     status_data = get_system_status()
     
-    # --- STATUS INDICATORS ---
-    st.markdown("---")
-    c1, c2, c3, c4 = st.columns(4)
+    # --- STATUS METRICS ---
+    m1, m2, m3, m4 = st.columns(4)
     
-    # 1. System Status
+    # 1. System Status Logic
     is_active = status_data.get('is_active', False)
-    # Check if heartbeat is recent (within 60 seconds)
-    last_heartbeat = status_data.get('last_heartbeat', '')
-    state = "🔴 STOPPED"
+    status_text = "OFFLINE"
     if is_active:
-        state = "🟢 RUNNING"
-        
-    c1.metric("System Status", state)
+        status_text = "ONLINE"
+        m1.success(f"System: {status_text}")
+    else:
+        m1.error(f"System: {status_text}")
     
-    # 2. Total Count
-    c2.metric("Total Detections", len(df))
+    # 2. Total Defects
+    total_count = len(df)
+    m2.metric("Total Detections", total_count)
     
-    # 3. Last Defect
-    last_defect = "None"
+    # 3. Latest Defect
+    latest_defect = "N/A"
     if not df.empty:
-        last_defect = df.iloc[0].get('defect_type', 'None')
-    c3.metric("Latest Defect", last_defect.upper())
+        latest_defect = df.iloc[0].get('defect_type', 'N/A').upper()
+    m3.metric("Last Defect Type", latest_defect)
     
-    # 4. Avg Confidence
+    # 4. Average Confidence
     avg_conf = 0
     if not df.empty and 'confidence' in df.columns:
         avg_conf = df['confidence'].mean()
-    c4.metric("Avg Confidence", f"{avg_conf:.1%}")
+    m4.metric("Avg. Confidence", f"{avg_conf:.1%}")
 
-    st.markdown("---")
-
-    # --- DATA VISUALIZATION ---
+    # --- MAIN CONTENT AREA ---
     if not df.empty:
-        t1, t2 = st.tabs(["📊 Analytics", "📋 Raw Data Log"])
+        st.markdown("### Operations Analytics")
+        c1, c2 = st.columns([1, 2])
         
-        with t1:
-            col_a, col_b = st.columns(2)
-            
-            with col_a:
-                # Pie Chart
-                if 'defect_type' in df.columns:
-                    counts = df['defect_type'].value_counts()
-                    fig = px.pie(values=counts, names=counts.index, title="Defect Distribution")
-                    st.plotly_chart(fig, use_container_width=True)
-            
-            with col_b:
-                # Timeline
-                if 'datetime' in df.columns:
-                    fig2 = px.scatter(df, x='datetime', y='confidence', 
-                                    color='defect_type', title="Detection Timeline")
-                    st.plotly_chart(fig2, use_container_width=True)
+        with c1:
+            # Donut Chart for Defect Distribution
+            if 'defect_type' in df.columns:
+                counts = df['defect_type'].value_counts().reset_index()
+                counts.columns = ['Type', 'Count']
+                fig = px.pie(counts, values='Count', names='Type', hole=0.5, 
+                             color_discrete_sequence=px.colors.qualitative.Bold)
+                fig.update_layout(showlegend=True, margin=dict(t=20, b=20, l=20, r=20), height=280)
+                st.plotly_chart(fig, use_container_width=True)
+        
+        with c2:
+            # Scatter Plot Timeline
+            if 'datetime' in df.columns:
+                fig2 = px.scatter(df, x='datetime', y='confidence', color='defect_type',
+                                size='confidence', hover_data=['defect_type'],
+                                color_discrete_sequence=px.colors.qualitative.Bold)
+                fig2.update_layout(
+                    xaxis_title="Timestamp", 
+                    yaxis_title="Confidence Score",
+                    margin=dict(t=20, b=20, l=0, r=0),
+                    height=280,
+                    showlegend=True
+                )
+                st.plotly_chart(fig2, use_container_width=True)
 
-        with t2:
-            st.dataframe(df[['datetime', 'defect_type', 'confidence', 'image_filename']], use_container_width=True)
+        # --- IMAGE GALLERY SECTION ---
+        st.divider()
+        st.markdown("### Defect Inspection Gallery")
+        
+        # Filter rows that have an image URL
+        if 'image_url' in df.columns:
+            gallery_df = df[df['image_url'].notna()].head(4) # Show 4 most recent
             
+            if not gallery_df.empty:
+                cols = st.columns(4)
+                for idx, (_, row) in enumerate(gallery_df.iterrows()):
+                    with cols[idx]:
+                        st.image(row['image_url'], use_container_width=True)
+                        st.markdown(f"**{row['defect_type'].upper()}**")
+                        st.caption(f"{row['confidence']:.1%} | {row['datetime'].strftime('%H:%M:%S')}")
+            else:
+                st.info("No images uploaded. Run the detection client to capture data.")
+        else:
+            st.warning("Waiting for image data stream...")
+
+        # --- RAW DATA TABLE ---
+        with st.expander("View System Logs"):
+            # Select specific columns for a cleaner view
+            display_cols = ['datetime', 'defect_type', 'confidence', 'image_url']
+            # Only keep columns that actually exist in the dataframe
+            valid_cols = [c for c in display_cols if c in df.columns]
+            
+            st.dataframe(
+                df[valid_cols].style.format({'confidence': '{:.2%}'}),
+                use_container_width=True
+            )
+            
+            if st.button("Clear System History"):
+                database = init_firebase()
+                if database:
+                    database.reference('detections').delete()
+                    database.reference('statistics').delete()
+                    st.success("History cleared successfully.")
+                    time.sleep(1)
+                    st.rerun()
+
     else:
-        st.info("Waiting for data... Run 'python test.py' on your laptop!")
+        st.info("System Ready. Waiting for incoming data stream...")
 
-    # Auto-refresh every 5 seconds
-    time.sleep(5)
+    # Auto-refresh every 3 seconds to keep dashboard live
+    time.sleep(3)
     st.rerun()
 
 if __name__ == "__main__":
