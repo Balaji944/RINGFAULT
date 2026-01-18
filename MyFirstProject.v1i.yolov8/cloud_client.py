@@ -1,14 +1,15 @@
 """
-Cloud Client - Robust Version for Local Script (test.py)
+Cloud Client - Direct Import Version
+Uses my_secrets.py to bypass JSON errors
 """
 import firebase_admin
 from firebase_admin import credentials, db
 from datetime import datetime
 import time
-from pathlib import Path
 
 class CloudClient:
-    def __init__(self, key_path, db_url):
+    def __init__(self, key_input=None, db_url=None):
+        # We ignore the inputs and load from my_secrets.py directly
         self.connected = False
         self.app = None
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -16,20 +17,16 @@ class CloudClient:
         print(f"🔌 Initializing Cloud Connection...")
 
         try:
-            # FORCE string conversion to fix 'AttrDict' and path errors
-            key_path = str(key_path)
-            db_url = str(db_url)
+            # Import the clean dictionary directly
+            from my_secrets import FIREBASE_CREDENTIALS, DATABASE_URL
             
-            # Check if file exists
-            if not Path(key_path).exists():
-                print(f"❌ Error: Key file not found at: {key_path}")
-                return
+            print("   🔑 Loaded credentials from my_secrets.py")
+            cred = credentials.Certificate(FIREBASE_CREDENTIALS)
 
-            # Connect (Single Instance Check)
+            # Connect to Firebase
             if not firebase_admin._apps:
-                cred = credentials.Certificate(key_path)
                 self.app = firebase_admin.initialize_app(cred, {
-                    'databaseURL': db_url
+                    'databaseURL': DATABASE_URL
                 })
             else:
                 self.app = firebase_admin.get_app()
@@ -38,7 +35,7 @@ class CloudClient:
             self.connected = True
             print("✅ Firebase Connected Successfully!")
             
-            # Send initial heartbeat to prove write access
+            # Send initial heartbeat
             self.update_system_status(True)
             
         except Exception as e:
@@ -46,9 +43,7 @@ class CloudClient:
             self.connected = False
 
     def send_detection(self, confidence, ring_count=1, defect_type="unknown", image_filename=None):
-        """Sends detection data to cloud"""
-        if not self.connected:
-            return
+        if not self.connected: return
 
         try:
             timestamp = time.time()
@@ -62,25 +57,18 @@ class CloudClient:
                 "session_id": self.session_id
             }
             
-            # Upload to 'detections' list
             self.db.reference(f'detections/{int(timestamp * 1000)}').set(data)
-            
-            # Update 'current_session' stats
             self.db.reference('statistics/current_session').update({
                 "last_active": time.time(),
                 "last_defect": defect_type
             })
-            
             print(f"   ☁️ Uploaded to Cloud: {defect_type} ({confidence:.1%})")
             
         except Exception as e:
             print(f"   ⚠ Upload Failed: {e}")
 
     def update_system_status(self, is_active):
-        """Updates ON/OFF status"""
-        if not self.connected:
-            return
-
+        if not self.connected: return
         try:
             self.db.reference('system_status').set({
                 "is_active": is_active,
