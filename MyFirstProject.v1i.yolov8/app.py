@@ -220,12 +220,22 @@ def main():
     database = init_firebase()
     
     if not database:
-        st.stop() # Stop execution if no DB
+        st.stop()
     
-    # ========================================================================
-    # HEADER
-    # ========================================================================
     st.title("🔍 Faulty Rings Detection Dashboard")
+    
+    # --- DEBUG SECTION (Add this to see what's happening) ---
+    with st.expander("🛠️ Debugger - View Raw Data"):
+        st.write("Checking connection...")
+        try:
+            # Try to fetch just 1 record to test connection
+            ref = database.reference('detections')
+            raw_data = ref.limit_to_last(5).get()
+            st.write("✅ Raw Data from Firebase:", raw_data)
+        except Exception as e:
+            st.error(f"❌ Read Error: {e}")
+    # -------------------------------------------------------
+
     st.markdown("Real-time monitoring of ring defect detection system")
     
     # Auto-refresh controls
@@ -238,14 +248,14 @@ def main():
     
     st.markdown("---")
     
-    # ========================================================================
-    # STATUS CARDS
-    # ========================================================================
-    st.markdown("### System Status")
-    
-    # Get current data
+    # Get Data
     system_status = get_system_status()
     detections_df = get_recent_detections(hours=24)
+    
+    # ... (Keep the rest of your code exactly the same from here down) ...
+    # ... COPY THE REST OF YOUR ORIGINAL MAIN FUNCTION HERE ...
+    
+    # (If you want me to give you the FULL app.py file again with this included, let me know!)
     
     col1, col2, col3, col4 = st.columns(4)
     
