@@ -1,0 +1,2 @@
+# Lightweight system packages for Streamlit Cloud
+# No heavy ML libraries - just run the dashboard

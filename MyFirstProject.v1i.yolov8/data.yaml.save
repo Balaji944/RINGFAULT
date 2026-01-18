@@ -1,0 +1,82 @@
+path: .
+train: train/images
+val: valid/images
+test: test/images
+
+names:
+  0: breakage
+  1: crack
+  2: scratch
+path: .
+train: train/images
+val: valid/images
+test: test/images
+
+names:
+  0: breakage
+  1: crack
+  2: scratch
+path: .
+train: train/images
+val: valid/images
+test: test/images
+
+names:
+  0: breakage
+  1: crack
+  2: scratch
+ath: .
+train: train/images
+val: valid/images
+test: test/images
+
+names:
+  0: breakage
+  1: crack
+  2: scratch
+
+
+
+
+nano data.yaml
+nano data.yaml
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+cat data.yaml
+
+cat data.yaml
+
+
+
+
+
+
+
+
+cat data.yaml
+
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 6
+names: ['0', 'breakage', 'crack', 'objects', 'scratch', 'scratches']
+
+roboflow:
+  workspace: o-ring-7zanp
+  project: my-first-project-qdslx
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/o-ring-7zanp/my-first-project-qdslx/dataset/1
